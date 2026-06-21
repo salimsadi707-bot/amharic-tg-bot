@@ -1,24 +1,16 @@
 import os
 import requests
-from telegram import Update
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+from flask import Flask, request
+from telegram import Bot
 
-async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-    prompt = f"""
-    አንተ በአማርኛ የምትነጋገር AI ረዳት ነህ።
+bot = Bot(token=BOT_TOKEN)
+app = Flask(__name__)
 
-    - ሁልጊዜ በአማርኛ መልስ
-    - ግልጽ እና ጠቃሚ መልስ ስጥ
-
-    ተጠቃሚ:
-    {user_text}
-    """
-
+def ask_gemini(user_text):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -28,25 +20,57 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "contents": [
             {
                 "parts": [
-                    {"text": prompt}
+                    {
+                        "text": f"""
+አንተ በአማርኛ የምትነጋገር AI ረዳት ነህ።
+
+- ሁልጊዜ በአማርኛ መልስ
+- ግልጽ እና ጠቃሚ መልስ ስጥ
+
+ተጠቃሚ:
+{user_text}
+"""
+                    }
                 ]
             }
         ]
     }
 
-    r = requests.post(url, json=payload)
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        data = r.json()
+
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    except Exception:
+        return "ይቅርታ፣ ስህተት ተፈጥሯል።"
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = request.get_json()
 
     try:
-        answer = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        answer = "ይቅርታ፣ ስህተት ተፈጥሯል።"
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"]["text"]
 
-    await update.message.reply_text(answer)
+        answer = ask_gemini(text)
 
-app = Application.builder().token(BOT_TOKEN).build()
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": answer
+            }
+        )
 
-app.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, reply)
-)
+    except Exception as e:
+        print(e)
 
-app.run_polling()
+    return "OK"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
